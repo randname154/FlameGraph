@@ -13,8 +13,9 @@ my @stack = ();
 
 <>;
 foreach (<>) {
+    next if /^\s*$/;
     chomp;
-    /\d+(?:\.\d+)? (?:Gc|Mc|Kc|cycles)\s+\d+\.\d+%\s+(-|(\d+(?:\.\d+)?) (Gc|Mc|Kc|cycles))\t \t(\s*)(.+)/ or die;
+    /(?:-|\d+(?:\.\d+)? (?:Gc|Mc|Kc|cycles))\s+\d+\.\d+%\s+(-|(\d+(?:\.\d+)?) (Gc|Mc|Kc|cycles))\t \t(\s*)(.+)/ or die;
     my $func = $5;
     my $depth = length ($4);
     $stack[$depth] = $5;
