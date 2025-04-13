@@ -127,6 +127,7 @@ my $searchcolor = "rgb(230,0,230)";	# color for search highlighting
 my $notestext = "";		# embedded notes in SVG
 my $subtitletext = "";		# second level title (optional)
 my $help = 0;
+my $inclusivediff = 0;
 
 sub usage {
 	die <<USAGE_END;
@@ -154,6 +155,7 @@ USAGE: $0 [options] infile > outfile.svg\n
 	--flamechart     # produce a flame chart (sort by time, do not merge stacks)
 	--negate         # switch differential hues (blue<->red)
 	--notes TEXT     # add notes comment in SVG (for debugging)
+	--inclusivediff  # produce diff svg using inclusive sample differences(including its children)
 	--help           # this message
 
 	eg,
@@ -186,6 +188,7 @@ GetOptions(
 	'flamechart'  => \$flamechart,
 	'negate'      => \$negate,
 	'notes=s'     => \$notestext,
+	'inclusivediff' => \$inclusivediff,
 	'help'        => \$help,
 ) or usage();
 $help && usage();
@@ -623,8 +626,16 @@ sub flow {
 	for ($i = $len_same; $i <= $len_b; $i++) {
 		my $k = "$this->[$i];$i";
 		$Tmp{$k}->{stime} = $v;
-		if (defined $d) {
+		if (defined $d and !$inclusivediff) {
 			$Tmp{$k}->{delta} += $i == $len_b ? $d : 0;
+		}
+	}
+
+	# propagate the diff upstream (total-diff)
+	if (defined $d && $inclusivediff) {
+		for ($i = 0; $i <= $len_b; $i++) {
+			my $k = "$this->[$i];$i";
+			$Tmp{$k}->{delta} += $d;
 		}
 	}
 
@@ -636,6 +647,7 @@ my @Data;
 my @SortedData;
 my $last = [];
 my $time = 0;
+my $time_prev = 0;
 my $delta = undef;
 my $ignored = 0;
 my $line;
@@ -712,6 +724,7 @@ foreach (@SortedData) {
 
 	if (defined $samples2) {
 		$time += $samples2;
+		$time_prev += $samples;
 	} else {
 		$time += $samples;
 	}
@@ -1212,6 +1225,19 @@ if ($palette) {
 	read_palette();
 }
 
+sub get_prev_samples {
+	my ($cur_samples, $in_delta, $in_factor) = @_;
+
+	my $prev_samples = $cur_samples - $in_delta * $in_factor;
+	if ($negate) {
+		$prev_samples = $cur_samples;
+	}
+	if ($prev_samples eq 0) {
+		$prev_samples = $cur_samples;
+	}
+	return $prev_samples;
+}
+
 # draw frames
 $im->group_start({id => "frames"});
 while (my ($id, $node) = each %Node) {
@@ -1254,9 +1280,19 @@ while (my ($id, $node) = each %Node) {
 			$info = "$escaped_func ($samples_txt $countname, $pct%)";
 		} else {
 			my $d = $negate ? -$delta : $delta;
-			my $deltapct = sprintf "%.2f", ((100 * $d) / ($timemax * $factor));
+			my $prev_samples = 0;
+			my $right_timemax = $negate ? $timemax : $time_prev;
+			my $deltapct = sprintf "%.2f", ((100 * $d) / $right_timemax);
+
+			my $deltapctself = "";
+			if ($inclusivediff) {
+				my $prev_func_samples = get_prev_samples($samples,$delta,$factor);
+				my $deltapctselfnum = sprintf "%.2f", ((100 * $d * $factor) / $prev_func_samples);
+				$deltapctself = $deltapctselfnum > 0 ? "*+$deltapctselfnum%" : "*$deltapctselfnum%";
+			}
+			
 			$deltapct = $d > 0 ? "+$deltapct" : $deltapct;
-			$info = "$escaped_func ($samples_txt $countname, $pct%; $deltapct%)";
+			$info = "$escaped_func ($samples_txt $countname, $pct%; $deltapct%; $deltapctself)";
 		}
 	}
 
@@ -1270,7 +1306,13 @@ while (my ($id, $node) = each %Node) {
 	} elsif ($func eq "-") {
 		$color = $dgrey;
 	} elsif (defined $delta) {
-		$color = color_scale($delta, $maxdelta);
+		if ($inclusivediff) {
+			my $prev_samples = get_prev_samples($samples,$delta,$factor);
+			$color = color_scale($delta * 100 * $factor / $prev_samples, 100);
+		}
+		else {
+			$color = color_scale($delta, $maxdelta);
+		}
 	} elsif ($palette) {
 		$color = color_map($colors, $func);
 	} else {
